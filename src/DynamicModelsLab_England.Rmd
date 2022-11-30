@@ -130,17 +130,348 @@ Develop a hierarchical Bayesian model (also called a state space model) of the l
 knitr::include_graphics("../data/DAG.jpg")
 ```
 
-### Posterior and Joint:
+### Process model:
 
 $$
+N_{t} \sim {\sf lognormal} \biggl(\log \bigl( \lambda (N_{t-1} - H_{t-1}) \bigr)  , \sigma^{2}_{p} \biggr)
+$$
+
+### Data model:
+
+$$
+y_{t} \sim {\sf Poisson} \bigr( N_{t} \cdot \phi \bigr)
+$$
+
+### Posterior and Joint:
+
 \begin{align*}
 \bigl[ \boldsymbol{N},\phi, \lambda, \sigma^{2}_{p} \mid \boldsymbol{y} \bigr] &\propto \prod_{t=2}^{T} {\sf Poisson} \bigr( y_{t} \mid N_{t} \cdot \phi \bigr) \\ 
 &\times \; {\sf lognormal} \biggl(N_{t} \biggm| \log \bigl( \lambda (N_{t-1} - H_{t-1}) \bigr)  , \sigma^{2}_{p} \biggr)\\
-&\times \; \prod_{j=1}^{J=3} {\sf normal} \bigr(\boldsymbol{\beta} \mid 0, 2.7\bigr) \\ 
-&\times \; \prod_{j=1}^{J=3} {\sf normal} \bigr(\boldsymbol{\alpha} \mid 0, 2.7\bigr) \cdot {\sf uniform}\bigr(\sigma^2 \mid 0, 100 \bigl) \\ 
+&\times \; {\sf normal} \bigr( N_{1} \mid \frac{y_1}{\phi} \bigr) \\
+&\times \; {\sf beta} \bigr( \phi \mid 154,792) \\
+&\times \; {\sf uniform} \bigr( \lambda \mid 0,1) \\ 
+&\times \; {\sf uniform} \bigr( \sigma^{2}_{p} \mid 0,1) \\ 
 \end{align*}
+
+## Question 2 
+
+An alternative approach, which is slightly more difficult to code, is to model the process as:
+
+$$
+\text{negative binomial}(N_t \mid \lambda (N_{t-1} - H_{t-1}), \rho))
+$$ 
+
+and model the data as:
+
+$$
+\text{binomial}(y_t \mid \text{round}(N_t \cdot \phi), p)
 $$
 
+where $p$ is a detection probability. Explain why this second formulation *might* be better than the formulation you are using. (It turns out they give virtually identical results.)
+
+### Response
+
+\textcolor{violet}{Using the negative binomial distribution for the process model would model the true population ($N_t$) as a count value (i.e., integer) occurring randomly over time or space. By comparison, the lognormal distribution would treat the true population ($N_t$) as a continuous quantity and it is not possible to have a "partial" individual (e.g., 0.5 of a lynx) in a population. Using the binomial distribution for the data model would allow for the adjustment of the variance independently from the mean which would allow us to account for the possibility that the data was not observed without error.}
+
+# Fitting the Model
+
+Now you’ll estimate the marginal posterior distribution of the unobserved, true state over time ($\boldsymbol{N}$), the parameters in the model $\lambda$ and $\phi$ as well as the process variance and observation variance. You’ll also summarize the marginal posterior distributions of the parameters and unobserved states. A note about the data. Each row in the data file gives the observed number of family groups for that year in column 2 and that year’s harvest in column 3. The harvest in each row influences the population size in the next row. So, for example, the 2016 harvest influences the 2017 population size.
+
+Before you begin it’s very helpful to use simulated data to the verify initial values and model. We simulate the true state by choosing some biologically reasonable values for model parameters and “eyeballing” the fit of the true state to the data. You can then use these simulated values for initial conditions (see the `inits` list below). This is of particular importance because failing to give reasonable initial conditions for dynamic models can cause problems in model fitting. Remember, supply initial conditions for *all* unobserved quantities in the posterior distribution (even those that do not have priors).
+
+```{r}
+y <- BayesNSF::LynxFamilies
+endyr <- nrow(y)
+n <- numeric(endyr + 1)
+mu <- numeric(endyr + 1)
+fg <- numeric(endyr + 1)
+phi <- 0.16
+lambda <- 1.07
+sigma.p <- 0.2
+ 
+n[1] <- y$census[1] / phi # n in the unit of individuals
+mu[1] <- n[1] # mean from deterministic model to simulate
+fg[1] <- n[1] * phi # Nt in the unit of
+ 
+for (t in 2:(endyr + 1)) {
+  mu[t] <- lambda * (n[t - 1] - y$harvest[t - 1])
+  n[t] <- rlnorm(1, log(mu[t]), sigma.p)
+  fg[t] <- n[t] * phi
+}
+
+plot(y$year, y$census, ylim = c(0, 100), xlab = "Year", ylab = "Family group", main = "Simulated data")
+lines(y$year, fg[1:length(y$year)])
+```
+
+Visually match simulated data with observations for initial conditions:
+
+```{r}
+## visually match simulated data with observations for initial conditions
+endyr = nrow(y)
+n = numeric(endyr + 1)
+mu = numeric(endyr + 1) #use this for family groups
+lambda = 1.1
+sigma.p = .00001
+n[1] = y$census[1]
+
+for(t in 2:(endyr + 1)) {
+  n[t] <- lambda * (y$census[t - 1] - .16 * y$harvest[t - 1])  # use this for family groups
+}
+
+plot(y$year, y$census, ylim = c(0, 100), xlab = "Year", ylab = "Family group", main = "Simulated data")
+lines(y$year, n[1:length(y$year)])
+```
+
+Here’s your starting code:
+
+```{r}
+data = list(
+    y.endyr = endyr,
+    y.a = shapes[1], 
+    y.b = shapes[2],
+    y.H = y$harvest,
+    y = y$census)
+
+inits = list(
+    list(lambda = 1.2, sigma.p = .01, N = n),
+    list(lambda = 1.01,sigma.p = .2, N = n * 1.2),
+    list(lambda = .95, sigma.p = .5, N = n * .5))
+
+# fam_grps[1] ~ dpois(y[1]) ???? do we need this?
+# fam_grps[t] <- N[t] * phi ????
+```
+
+## Question 1
+
+Write the JAGS model to estimate the marginal posterior distribution of the unobserved, true state over time ($\boldsymbol{N}$), the parameters in the model $\lambda$ and $\phi$ as well as the process variance and observation variance. Include a summary the marginal posterior distributions of the parameters and unobserved states.
+
+### JAGS Model
+
+Write out the JAGS code for the model.
+
+```{r, eval=FALSE}
+## JAGS Model
+model{
+  ###########################
+  # priors
+  ###########################
+    phi ~ dbeta(y.a, y.b)
+    lambda ~ dunif(0, 2)
+    sigma.p ~ dunif(0, 1)
+    tau <- 1/sigma.p^2
+    # initial conditions informed priors
+    N[1] ~ dnorm(y[1]/phi, tau) #this must be treated as prior so that you have N[t-1]
+    # ????
+    
+  ###########################
+  # likelihood
+  ###########################
+    # Process model:
+    for(t in 2:(y.endyr+1)){
+  	  alpha[t] <- lambda * (N[t-1] - y.H[t-1])
+  	  N[t] ~ dlnorm(log(max(alpha[t], 0.000001)), tau) # can't take the log of alpha <= 0
+  	  # ????
+  	}
+    # Data model:
+    for(t in 2:y.endyr){
+      mu[t] <- N[t] * phi
+      # returns density (for continuous) because l.h.s. is data (deterministic b/c defined in data)
+  	    y[t] ~ dpois(mu[t]) 
+    }
+  
+  ###########################
+  # Derived quantities
+  ###########################
+    # sum of squares calculation
+      # have to put this in own loop because y[1] defined separately 
+      for(t in 1:y.endyr){
+        mu[t] <- N[t] * phi
+        # returns random number generator because l.h.s. is not data (i.e. it is unknown: stochastic node)
+          y_sim[t] ~ dpois(mu[t]) 
+        # sum of squares 
+          sq[t] <- (y[t]-mu[t])^2
+          sq_sim[t] <- (y_sim[t]-mu[t])^2
+      }
+    #posterior predictive checks
+      # test statistics y
+      mean_y <- mean(y)
+      sd_y <- sd(y)
+      fit_y <- sum(sq)
+      # test statistics y_sim
+      mean_y_sim <- mean(y_sim)
+      sd_y_sim <- sd(y_sim)
+      fit_y_sim <- sum(sq_sim)
+      # p-values
+      p_val_mean <- step(mean_y_sim - mean_y)
+      p_val_sd <- step(sd_y_sim - sd_y)
+      p_val_fit <- step(fit_y_sim - fit_y)
+}
+```
+
+### Implement JAGS Model
+
+```{r}
+##################################################################
+# insert JAGS model code into an R script
+##################################################################
+{ # Extra bracket needed only for R markdown files - see answers
+  sink("LynxJAGS.R") # This is the file name for the jags code
+  cat("
+  model{
+    ###########################
+    # priors
+    ###########################
+      phi ~ dbeta(y.a, y.b)
+      lambda ~ dunif(0, 2)
+      sigma.p ~ dunif(0, 1)
+      tau <- 1/sigma.p^2
+      # initial conditions informed priors
+      N[1] ~ dnorm(y[1]/phi, tau) #this must be treated as prior so that you have N[t-1]
+      # ????
+      
+    ###########################
+    # likelihood
+    ###########################
+      # Process model:
+      for(t in 2:(y.endyr+1)){
+    	  alpha[t] <- lambda * (N[t-1] - y.H[t-1])
+    	  N[t] ~ dlnorm(log(max(alpha[t], 0.000001)), tau) # can't take the log of alpha <= 0
+    	  # ????
+    	}
+      # Data model:
+      for(t in 2:y.endyr){
+        mu[t] <- N[t] * phi
+        # returns density (for continuous) because l.h.s. is data (deterministic b/c defined in data)
+    	    y[t] ~ dpois(mu[t]) 
+      }
+    
+    ###########################
+    # Derived quantities
+    ###########################
+      # sum of squares calculation
+        # have to put this in own loop because y[1] defined separately 
+        for(t in 1:y.endyr){
+          mu[t] <- N[t] * phi
+          # returns random number generator because l.h.s. is not data (i.e. it is unknown: stochastic node)
+            y_sim[t] ~ dpois(mu[t]) 
+          # sum of squares 
+            sq[t] <- (y[t]-mu[t])^2
+            sq_sim[t] <- (y_sim[t]-mu[t])^2
+        }
+      #posterior predictive checks
+        # test statistics y
+        mean_y <- mean(y)
+        sd_y <- sd(y)
+        fit_y <- sum(sq)
+        # test statistics y_sim
+        mean_y_sim <- mean(y_sim)
+        sd_y_sim <- sd(y_sim)
+        fit_y_sim <- sum(sq_sim)
+        # p-values
+        p_val_mean <- step(mean_y_sim - mean_y)
+        p_val_sd <- step(sd_y_sim - sd_y)
+        p_val_fit <- step(fit_y_sim - fit_y)
+  }
+  ", fill = TRUE)
+  sink()
+}
+##################################################################
+# implement model
+##################################################################
+# specify 3 scalars, n.adapt, n.update, and n.iter
+# n.adapt = number of iterations that JAGS will use to choose the sampler 
+  # and to assure optimum mixing of the MCMC chain
+n.adapt = 1000
+# n.update = number of iterations that will be discarded to allow the chain to 
+#   converge before iterations are stored (aka, burn-in)
+n.update = 10000
+# n.iter = number of iterations that will be stored in the 
+  # final chain as samples from the posterior distribution
+n.iter = 10000
+######################
+# Call to JAGS
+######################
+jm = rjags::jags.model(
+  file = "LynxJAGS.R"
+  , data = data
+  , inits = inits
+  , n.chains = length(inits)
+  , n.adapt = n.adapt
+)
+stats::update(jm, n.iter = n.update, progress.bar = "none")
+# save the coda object (more precisely, an mcmc.list object) to R as "zm"
+zm = rjags::coda.samples(
+  model = jm
+  , variable.names = c(
+      # parameters
+      "phi"
+      , "lambda"
+      , "sigma.p"
+      , "tau"
+      # process model
+      , "N"
+      # # test statistics
+      # , "mean_y"
+      # , "sd_y"
+      # , "fit_y"
+      # , "mean_y_sim"
+      # , "sd_y_sim"
+      # , "fit_y_sim"
+      # # p-values
+      # , "p_val_mean"
+      # , "p_val_sd"
+      # , "p_val_fit"
+      # derived quantities
+    )
+  , n.iter = n.iter
+  , n.thin = 1
+  , progress.bar = "none"
+)
+```
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE, include=FALSE}
+remove(list = ls()[grep("_temp",ls())])
+gc()
+```
 
 
-asdf
+## Question 2
+
+Check MCMC chains for model parameters, process variance, and latent states for convergence. This will probably require using the `excl` option in `MCMCsummary`
+
+## Question 4
+
+Conduct posterior predictive checks by simulating a new dataset for family groups ($f_t$) at every MCMC iteration. Calculate a Bayesian p value using the sums of squared discrepancy between the observed and the predicted number of family groups based on observed and simulated data,
+
+\begin{align*}
+T^{observed} &= \sum_{t=1}^{n} \bigl( f_{t}^{observed} - N_{t} \phi \bigr)^{2} \\
+T^{model} &= \sum_{t=1}^{n} \bigl( f_{t}^{simulated} - N_{t} \phi \bigr)^{2} \\
+\end{align*}
+
+The Bayesian p value is the proportion of MCMC iterations for which $T^{model} > T^{obs}$
+
+Assure yourself that the process model adequately accounts for temporal autocorrelation in the residuals— allowing the assumption that they are independent and identically distributed. To do this, include a derived quantity
+
+$$
+e_{t} = y_{t} - N_{t} \phi
+$$
+
+in your JAGS code and coda object. Use the following code or something like it to examine how autocorrelation in the residuals changes with time lag.
+
+```{r, eval=FALSE}
+acf(unlist(MCMCpstr(z, param = "e", func = mean)), main = "", lwd = 3, ci = 0)
+```
+
+## Question 5
+
+Write a paragraph describing how to interpret the plot produced by this function.
+
+\textcolor{violet}{fill me in!!!}
+
+## Question 6
+
+Plot the median of the marginal posterior distribution of the number of lynx family groups over time (1998-2016) including a highest posterior density interval. Include your forecast for 2017 (the predictive process distribution) in this plot.
+
+## Question 6
+
+**Optional, but strongly recommended for those who seek to support policy and management with models** Due to licensing constraints related to the time that it takes to properly issue hunting permits/licenses, Lynx harvest decisions are made before the population is censused, even though harvest actually occurs shortly after the census. Make a forecast of the number of family groups in 2018 assuming five alternative levels for 2017 harvest (0, 10, 25, 50, and 75 animals). Environmentalists and hunters have agreed on a acceptable range for lynx abundance in the unit, 26 - 32 family groups. Compute the probability that the post-harvest number of family groups will be below, within, and above this range during 2018. Tabulate these values. Hint: Set up a “model experiment” in your JAGS code where you forecast the number of lynx family groups during 2018 under the specified levels of harvest. Extract the MCMC chains for the forecasted family groups( e.g., `fg.hat`) using `MCMCchains` Use the `ecdf` function on the R side to compute the probabilities that the forecasted number groups will be below, within, or above the acceptable range.
