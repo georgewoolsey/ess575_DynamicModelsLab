@@ -1,0 +1,146 @@
+---
+title: "ESS 575: Dynamic Models Lab"
+author: "Team England" 
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+linkcolor: blue
+header-includes:
+  - \usepackage{caption}
+  - \captionsetup[figure]{labelformat=empty}
+editor_options: 
+  chunk_output_type: console
+knit: (function(inputFile, encoding){ 
+    out_dir <- '../';
+    rmarkdown::render(inputFile, encoding = encoding, output_file=file.path(dirname(inputFile), out_dir, 'DynamicModelsLab_England.pdf')) 
+  })
+---
+
+Team England:
+
+  - Caroline Blommel
+  - Carolyn Coyle
+  - Bryn Crosby
+  - George Woolsey
+  
+cblommel@mail.colostate.edu, carolynm@mail.colostate.edu, brcrosby@rams.colostate.edu, george.woolsey@colostate.edu
+
+```{r setup, include=F}
+# knit options
+knitr::opts_chunk$set(
+  echo = TRUE
+  , warning = FALSE
+  , message = FALSE
+  , fig.height = 5
+  , fig.width = 7
+  , eval = TRUE
+  , fig.align='center'
+)
+```
+
+\newpage
+
+# Motivation
+
+The Eurasian lynx (*Lynx lynx*) is a medium-sized predator with broad distribution in the boreal forests of Europe and Siberia. The lynx is classified as a threatened species throughout much of its range and there is controversy about the legal harvest of lynx in Sweden. Proponents of harvest argue that allowing hunting of lynx reduces illegal kill (poaching). Moreover, Sweden is committed to regulate lynx numbers to prevent excessive predation on reindeer because reindeer are critical to the livelihoods of indigenous pastoralists, the Sami. Many environmentalists oppose harvest, however, arguing that lynx are too rare to remove their fully protected status. A similar controversy surrounds management of wolves in the Western United States.
+
+```{r, echo=FALSE, out.width="85%", out.height="85%", fig.cap="", fig.align='center'}
+knitr::include_graphics("../data/lynx_sami.jpg")
+```
+
+**Fig. 1.** A forecasting model for the abundance of lynx helps managers make decisions that can be justified to citizens. The model you will develop today is not a toy. It is currently used in Sweden and Norway to manage Lynx (H. Andren, N. T. Hobbs, M. Aronsson, H. Broseth, G. Chapron, J. D. C. Linnell, J. Odden, J. Persson, and E. B. Nilsen. Harvest models of small populations of a large carnivore using Bayesian forecasting. Ecological Applications, 30(3):e02063, 2020.)
+
+You have data on the number of lynx family groups censused in a management unit as well as annual records of lynx harvested from the unit. You will model the population using the deterministic model:
+
+$$
+N_t = \lambda(N_{t-1} - H_{t-1} )
+$$
+
+where $N_{t}$ is the true, unobserved abundance of lynx and $H_{t-1}$ is the number of lynx harvested during $t-1$ to $t$. The parentheses in this expression reflect the fact that harvest occurs immediately after census, such that the next years population increment comes from the post-harvest population size.
+
+**ADVANCED (for the population modelers)** What would be the model if harvest occurred immediately before census? Three months after census? Continuously throughout the year?
+
+Assume the harvest ($H_t$) is and the number of family groups ($y_t$) are observed without error. Harvest is closely regulated and all hunters who harvest a lynx are required by law to register the animal with the county. You are entitled to make the assumption that family groups are observed without error because your Scandinavian colleagues are amazing snow trackers and do a good job of estimating the number of family groups (if not the number of lynx) in a management region. The challenge in this problem is that the observations of lynx abundance (family groups) are not the same as the observation of harvest (number of lynx). Fortunately, you have prior information, hard won from radio-telemetry, on the proportional relationship between number of family groups and number of lynx in the population, i.e:
+
+$$
+\phi = \frac{f}{N}
+$$ 
+
+where $f$ is the number of family groups and $N$ is the population size, mean $\phi = 0.163$ with standard deviation of the mean = 0.012.
+
+## R libraries needed for this lab
+
+You need to load the following libraries. Set the seed to 10 to compare your answers to ours. The data for this problem is located in the `LynxFamilies` data frame of the `BayesNSF` package.
+ 
+```{r, eval=T}
+# bread-and-butter
+library(tidyverse)
+library(lubridate)
+library(viridis)
+library(scales)
+library(latex2exp)
+# visualization
+library(cowplot)
+library(kableExtra)
+# jags and bayesian
+library(rjags)
+library(MCMCvis)
+library(HDInterval)
+library(BayesNSF)
+#set seed
+set.seed(10)
+```
+ 
+\newpage
+
+# Generating an Informed Prior for $\phi$
+
+We’ve provided you with a useful moment matching function below for converting the mean and standard deviation of $\phi$ to the parameters for the beta distribution you will use as an informed prior on $\phi$.
+
+```{r}
+# Function to get beta shape parameters from moments
+shape_from_stats <- function(mu = mu.global, sigma = sigma.global) {
+  a <-(mu^2 - mu^3 - mu * sigma^2) / sigma^2
+  b <- (mu - 2 * mu^2 + mu^3 - sigma^2 + mu*sigma^2) / sigma^2
+  shape_ps <- c(a, b)
+  return(shape_ps)
+}
+
+# get parameters for distribution of population multiplier, 1/p
+shapes = shape_from_stats(.163, .012)
+
+# check prior on p using simulated data from beta distribution
+x = seq(0, 1, .001)
+p = dbeta(x, shapes[1], shapes[2])
+plot(x, p, typ = "l", xlim = c(0, 1))
+```
+
+
+# Diagram the Bayesian network
+
+## Question 1
+
+Develop a hierarchical Bayesian model (also called a state space model) of the lynx population in the management unit. Diagram the Bayesian network (the DAG) of knowns and unknowns and write out the posterior and factored joint distribution. Use a lognormal distribution to model the true lynx population size over time. Use a Poisson distribution for the data model relating the true, unobserved state (the total population size) to the observed data (number of family groups).
+
+### Bayesian network (the DAG)
+
+```{r, echo=FALSE, out.width="60%", out.height="60%", fig.cap="Bayesian network for lynx population", fig.align='center'}
+knitr::include_graphics("../data/DAG.jpg")
+```
+
+### Posterior and Joint:
+
+$$
+\begin{align*}
+\bigl[ \boldsymbol{N},\phi, \lambda, \sigma^{2}_{p} \mid \boldsymbol{y} \bigr] &\propto \prod_{t=2}^{T} {\sf Poisson} \bigr( y_{t} \mid N_{t} \cdot \phi \bigr) \\ 
+&\times \; {\sf lognormal} \biggl(N_{t} \biggm| \log \bigl( \lambda (N_{t-1} - H_{t-1}) \bigr)  , \sigma^{2}_{p} \biggr)\\
+&\times \; \prod_{j=1}^{J=3} {\sf normal} \bigr(\boldsymbol{\beta} \mid 0, 2.7\bigr) \\ 
+&\times \; \prod_{j=1}^{J=3} {\sf normal} \bigr(\boldsymbol{\alpha} \mid 0, 2.7\bigr) \cdot {\sf uniform}\bigr(\sigma^2 \mid 0, 100 \bigl) \\ 
+\end{align*}
+$$
+
+
+
+asdf

@@ -1,1 +1,1 @@
-# ess575_DynamicModelsLab
+# ess575_JAGSProblemsLab
