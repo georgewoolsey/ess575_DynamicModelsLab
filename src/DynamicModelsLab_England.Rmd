@@ -256,12 +256,14 @@ model{
   # priors
   ###########################
     phi ~ dbeta(y.a, y.b)
-    lambda ~ dunif(0, 2)
-    sigma.p ~ dunif(0, 1)
+    lambda ~ dunif(0, 10)
+    sigma.p ~ dunif(0, 100)
     tau <- 1/sigma.p^2
     # initial conditions informed priors
-    N[1] ~ dnorm(y[1]/phi, tau) #this must be treated as prior so that you have N[t-1]
+    # N[1] ~ dnorm(y[1]/phi, tau) #this must be treated as prior so that you have N[t-1]
+    N[1] ~ dlnorm(log(y[1]/phi) , tau)
     # ????
+    mu[1] <- N[1] * phi
     
   ###########################
   # likelihood
@@ -285,7 +287,6 @@ model{
     # sum of squares calculation
       # have to put this in own loop because y[1] defined separately 
       for(t in 1:y.endyr){
-        mu[t] <- N[t] * phi
         # returns random number generator because l.h.s. is not data (i.e. it is unknown: stochastic node)
           y_sim[t] ~ dpois(mu[t]) 
         # sum of squares 
@@ -317,61 +318,62 @@ model{
 { # Extra bracket needed only for R markdown files - see answers
   sink("LynxJAGS.R") # This is the file name for the jags code
   cat("
-  model{
-    ###########################
-    # priors
-    ###########################
-      phi ~ dbeta(y.a, y.b)
-      lambda ~ dunif(0, 2)
-      sigma.p ~ dunif(0, 1)
-      tau <- 1/sigma.p^2
-      # initial conditions informed priors
-      N[1] ~ dnorm(y[1]/phi, tau) #this must be treated as prior so that you have N[t-1]
-      # ????
-      
-    ###########################
-    # likelihood
-    ###########################
-      # Process model:
-      for(t in 2:(y.endyr+1)){
-    	  alpha[t] <- lambda * (N[t-1] - y.H[t-1])
-    	  N[t] ~ dlnorm(log(max(alpha[t], 0.000001)), tau) # can't take the log of alpha <= 0
-    	  # ????
-    	}
-      # Data model:
-      for(t in 2:y.endyr){
-        mu[t] <- N[t] * phi
-        # returns density (for continuous) because l.h.s. is data (deterministic b/c defined in data)
-    	    y[t] ~ dpois(mu[t]) 
-      }
+  ## JAGS Model
+model{
+  ###########################
+  # priors
+  ###########################
+    phi ~ dbeta(y.a, y.b)
+    lambda ~ dunif(0, 10)
+    sigma.p ~ dunif(0, 100)
+    tau <- 1/sigma.p^2
+    # initial conditions informed priors
+    N[1] ~ dlnorm(log(y[1]/phi) , tau)
+    # ????
+    mu[1] <- N[1] * phi
     
-    ###########################
-    # Derived quantities
-    ###########################
-      # sum of squares calculation
-        # have to put this in own loop because y[1] defined separately 
-        for(t in 1:y.endyr){
-          mu[t] <- N[t] * phi
-          # returns random number generator because l.h.s. is not data (i.e. it is unknown: stochastic node)
-            y_sim[t] ~ dpois(mu[t]) 
-          # sum of squares 
-            sq[t] <- (y[t]-mu[t])^2
-            sq_sim[t] <- (y_sim[t]-mu[t])^2
-        }
-      #posterior predictive checks
-        # test statistics y
-        mean_y <- mean(y)
-        sd_y <- sd(y)
-        fit_y <- sum(sq)
-        # test statistics y_sim
-        mean_y_sim <- mean(y_sim)
-        sd_y_sim <- sd(y_sim)
-        fit_y_sim <- sum(sq_sim)
-        # p-values
-        p_val_mean <- step(mean_y_sim - mean_y)
-        p_val_sd <- step(sd_y_sim - sd_y)
-        p_val_fit <- step(fit_y_sim - fit_y)
-  }
+  ###########################
+  # likelihood
+  ###########################
+    # Process model:
+    for(t in 2:(y.endyr+1)){
+  	  alpha[t] <- lambda * (N[t-1] - y.H[t-1])
+  	  N[t] ~ dlnorm(log(max(alpha[t], 0.000001)), tau) # can't take the log of alpha <= 0
+  	  # ????
+  	}
+    # Data model:
+    for(t in 2:y.endyr){
+      mu[t] <- N[t] * phi
+      # returns density (for continuous) because l.h.s. is data (deterministic b/c defined in data)
+  	    y[t] ~ dpois(mu[t]) 
+    }
+  
+  ###########################
+  # Derived quantities
+  ###########################
+    # sum of squares calculation
+      # have to put this in own loop because y[1] defined separately 
+      for(t in 1:y.endyr){
+        # returns random number generator because l.h.s. is not data (i.e. it is unknown: stochastic node)
+          y_sim[t] ~ dpois(mu[t]) 
+        # sum of squares 
+          sq[t] <- (y[t]-mu[t])^2
+          sq_sim[t] <- (y_sim[t]-mu[t])^2
+      }
+    #posterior predictive checks
+      # test statistics y
+      mean_y <- mean(y)
+      sd_y <- sd(y)
+      fit_y <- sum(sq)
+      # test statistics y_sim
+      mean_y_sim <- mean(y_sim)
+      sd_y_sim <- sd(y_sim)
+      fit_y_sim <- sum(sq_sim)
+      # p-values
+      p_val_mean <- step(mean_y_sim - mean_y)
+      p_val_sd <- step(sd_y_sim - sd_y)
+      p_val_fit <- step(fit_y_sim - fit_y)
+}
   ", fill = TRUE)
   sink()
 }
@@ -411,16 +413,16 @@ zm = rjags::coda.samples(
       # process model
       , "N"
       # # test statistics
-      # , "mean_y"
-      # , "sd_y"
-      # , "fit_y"
-      # , "mean_y_sim"
-      # , "sd_y_sim"
-      # , "fit_y_sim"
+      , "mean_y"
+      , "sd_y"
+      , "fit_y"
+      , "mean_y_sim"
+      , "sd_y_sim"
+      , "fit_y_sim"
       # # p-values
-      # , "p_val_mean"
-      # , "p_val_sd"
-      # , "p_val_fit"
+      , "p_val_mean"
+      , "p_val_sd"
+      , "p_val_fit"
       # derived quantities
     )
   , n.iter = n.iter
@@ -438,6 +440,80 @@ gc()
 ## Question 2
 
 Check MCMC chains for model parameters, process variance, and latent states for convergence. This will probably require using the `excl` option in `MCMCsummary`
+
+## Trace plots
+
+```{r}
+# trace plot
+MCMCvis::MCMCtrace(zm, params = c(
+    # parameters
+    "phi"
+    , "lambda"
+    , "sigma.p"
+    , "tau"
+    # p-values
+    , "p_val_mean"
+    , "p_val_sd"
+    , "p_val_fit"
+  )
+  , pdf = FALSE
+)
+```
+
+## Posterior predictive check - Test Statistics
+
+```{r}
+# summary
+MCMCvis::MCMCsummary(zm, params = c(
+      # test statistics
+      "mean_y"
+      , "mean_y_sim"
+      , "sd_y"
+      , "sd_y_sim"
+      , "fit_y"
+      , "fit_y_sim"
+    )
+    , n.eff = FALSE
+  )
+```
+
+## Posterior predictive check - p-values
+
+```{r}
+# summary
+MCMCvis::MCMCsummary(zm, params = c(
+      # p-values
+      "p_val_mean"
+      , "p_val_sd"
+      , "p_val_fit"
+    )
+  )
+```
+
+## Estimates of the $\boldsymbol{\beta}$ and detection probability $p$
+
+```{r}
+# summary
+MCMCvis::MCMCsummary(zm, params = c(
+    "phi"
+    , "lambda"
+    , "sigma.p"
+    , "tau"
+    )
+  )
+```
+
+## Caterpillar plot for the  $\boldsymbol{\beta}$ and detection probability $p$
+
+```{r}
+# Caterpillar plots
+MCMCvis::MCMCplot(
+  zm
+  , params = c("b0", "b1", "b2", "b3", "p")
+  , horiz = TRUE
+)
+```
+
 
 ## Question 4
 
