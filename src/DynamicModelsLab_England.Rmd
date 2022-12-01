@@ -84,7 +84,6 @@ library(latex2exp)
 # visualization
 library(cowplot)
 library(kableExtra)
-library(statsmodels.graphics.tsaplots)
 # jags and bayesian
 library(rjags)
 library(MCMCvis)
@@ -127,7 +126,7 @@ Develop a hierarchical Bayesian model (also called a state space model) of the l
 
 ### Bayesian network (the DAG)
 
-```{r, echo=FALSE, out.width="60%", out.height="60%", fig.cap="Bayesian network for lynx population", fig.align='center'}
+```{r, echo=FALSE, out.width="80%", out.height="80%", fig.cap="Bayesian network for lynx population", fig.align='center'}
 knitr::include_graphics("../data/DAG.jpg")
 ```
 
@@ -270,6 +269,7 @@ model{
   	  alpha[t] <- lambda * (N[t-1] - y.H[t-1])
   	  N[t] ~ dlnorm(log(max(alpha[t], 0.000001)), tau) # can't take the log of alpha <= 0
   	  # calculate the mean for use in the data model
+  	    # include in this loop to get the forecast value for #6
   	  fam_grps[t] <- N[t] * phi # mean family groups (mu)
   	}
     # Data model:
@@ -342,6 +342,7 @@ model{
     	  alpha[t] <- lambda * (N[t-1] - y.H[t-1])
     	  N[t] ~ dlnorm(log(max(alpha[t], 0.000001)), tau) # can't take the log of alpha <= 0
     	  # calculate the mean for use in the data model
+    	    # include in this loop to get the forecast value for #6
     	  fam_grps[t] <- N[t] * phi # mean family groups (mu)
     	}
       # Data model:
@@ -527,7 +528,7 @@ MCMCvis::MCMCsummary(zm, params = c(
   )
 ```
 
-### Posterior predictive check - Sum of Squared Errors
+### Posterior predictive check - Sum of Squared Errors Plot
 
 ```{r}
 # PLOT
@@ -605,12 +606,93 @@ MCMCvis::MCMCsummary(zm, params = c("e"))
 
 Write a paragraph describing how to interpret the plot produced by this function.
 
+### Response
+
 \textcolor{violet}{The autocorrelation function (ACF) estimate shows the autocorrelation of the model error over time. It is an estimate of the temporal dependence of the model errors and is calculated as a correlation coefficient ($\rho$) where $-1 \le \rho \le 1$. Ideally, the plot of the ACF would show no pattern (e.g. decreasing or increasing) over time (a-axis) with correlation values ($\rho$) not near -1 or 1. The plot of the ACF above reveals that this chain is not highly autocorrelated, which means that the assumption of independent errors does hold for these data.}
 
 ## Question 6
 
 Plot the median of the marginal posterior distribution of the number of lynx family groups over time (1998-2016) including a highest posterior density interval. Include your forecast for 2017 (the predictive process distribution) in this plot.
 
+### Median model prediction of lynx family groups plot
+
+```{r}
+# data
+dta_temp <- dplyr::bind_cols(
+  t = c(y$year, max(y$year)+1)
+  , census = c(y$census, NA)
+  , median_fam_grps = MCMCvis::MCMCpstr(zm, params = "fam_grps", func = median) %>% unlist()
+  , MCMCvis::MCMCpstr(zm, params = "fam_grps", func = function(x) HDInterval::hdi(x, credMass = 0.95)) %>%
+      as.data.frame()
+) %>% 
+  dplyr::mutate(
+    census_fcast = ifelse(dplyr::row_number()==dplyr::n(), median_fam_grps, NA)
+    , census_fcast2 = ifelse(dplyr::row_number()>=dplyr::n()-1, median_fam_grps, NA)
+  )
+# plot
+ggplot(data = dta_temp, mapping = aes(x = t)) +
+  geom_point(
+    mapping = aes(y = census)
+    , color = "gray65"
+    , shape = 16
+    , size = 2
+  ) +
+  geom_point(
+    mapping = aes(y = census_fcast, color = "Forecast")
+    # , color = "firebrick"
+    , shape = 1
+    , size = 3
+  ) +
+  geom_line(
+    mapping = aes(y = median_fam_grps, color = "Median model pred.")
+    # , color = "black"
+    , lwd = 1.1
+  ) +
+  geom_line(
+    mapping = aes(y = census_fcast2, color = "Forecast")
+    , lwd = 1.1
+    , linetype = "dashed"
+  ) +
+  geom_line(
+    mapping = aes(y = fam_grps.upper, color = "95% HDI")
+    # , color = "royalblue"
+    , lwd = 1
+    , linetype = "dashed"
+  ) +
+  geom_line(
+    mapping = aes(y = fam_grps.lower, color = "95% HDI")
+    , lwd = 1
+    , linetype = "dashed"
+  ) +
+  scale_y_continuous(breaks = scales::extended_breaks(n=10)) +
+  scale_x_continuous(breaks = scales::extended_breaks(n=15)) +
+  scale_color_manual(values = c("navy", "tomato3", "gray15")) +
+  xlab("Year") +
+  ylab("Family Groups") +
+  labs(
+    title = "Number of lynx family groups"
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "bottom"
+    , legend.direction = "horizontal"
+    , legend.title = element_blank()
+    , axis.text.x = element_text(angle = 60, vjust = 0.5, hjust = 0.5)
+  ) +
+  guides(color = guide_legend(override.aes = list(shape = 15,size = 5)))
+  
+```
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE, include=FALSE}
+remove(list = ls()[grep("_temp",ls())])
+gc()
+```
+
 ## Question 6
 
 **Optional, but strongly recommended for those who seek to support policy and management with models** Due to licensing constraints related to the time that it takes to properly issue hunting permits/licenses, Lynx harvest decisions are made before the population is censused, even though harvest actually occurs shortly after the census. Make a forecast of the number of family groups in 2018 assuming five alternative levels for 2017 harvest (0, 10, 25, 50, and 75 animals). Environmentalists and hunters have agreed on a acceptable range for lynx abundance in the unit, 26 - 32 family groups. Compute the probability that the post-harvest number of family groups will be below, within, and above this range during 2018. Tabulate these values. Hint: Set up a “model experiment” in your JAGS code where you forecast the number of lynx family groups during 2018 under the specified levels of harvest. Extract the MCMC chains for the forecasted family groups( e.g., `fg.hat`) using `MCMCchains` Use the `ecdf` function on the R side to compute the probabilities that the forecasted number groups will be below, within, or above the acceptable range.
+
+```{r}
+# try it
+```
+
