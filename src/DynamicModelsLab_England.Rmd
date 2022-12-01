@@ -84,6 +84,7 @@ library(latex2exp)
 # visualization
 library(cowplot)
 library(kableExtra)
+library(statsmodels.graphics.tsaplots)
 # jags and bayesian
 library(rjags)
 library(MCMCvis)
@@ -237,8 +238,6 @@ inits = list(
     list(lambda = 1.01,sigma.p = .2, N = n * 1.2),
     list(lambda = .95, sigma.p = .5, N = n * .5))
 
-# fam_grps[1] ~ dpois(y[1]) ???? do we need this?
-# fam_grps[t] <- N[t] * phi ????
 ```
 
 ## Question 1
@@ -260,10 +259,8 @@ model{
     sigma.p ~ dunif(0, 100)
     tau <- 1/sigma.p^2
     # initial conditions informed priors
-    # N[1] ~ dnorm(y[1]/phi, tau) #this must be treated as prior so that you have N[t-1]
     N[1] ~ dlnorm(log(y[1]/phi) , tau)
-    # ????
-    mu[1] <- N[1] * phi
+    fam_grps[1] <- N[1] * phi # mean family groups (mu)
     
   ###########################
   # likelihood
@@ -272,13 +269,13 @@ model{
     for(t in 2:(y.endyr+1)){
   	  alpha[t] <- lambda * (N[t-1] - y.H[t-1])
   	  N[t] ~ dlnorm(log(max(alpha[t], 0.000001)), tau) # can't take the log of alpha <= 0
-  	  # ????
+  	  # calculate the mean for use in the data model
+  	  fam_grps[t] <- N[t] * phi # mean family groups (mu)
   	}
     # Data model:
     for(t in 2:y.endyr){
-      mu[t] <- N[t] * phi
       # returns density (for continuous) because l.h.s. is data (deterministic b/c defined in data)
-  	    y[t] ~ dpois(mu[t]) 
+  	    y[t] ~ dpois(fam_grps[t]) 
     }
   
   ###########################
@@ -288,16 +285,16 @@ model{
       # have to put this in own loop because y[1] defined separately 
       for(t in 1:y.endyr){
         # returns random number generator because l.h.s. is not data (i.e. it is unknown: stochastic node)
-          y_sim[t] ~ dpois(mu[t]) 
+          y_sim[t] ~ dpois(fam_grps[t]) 
         # sum of squares 
-          sq[t] <- (y[t]-mu[t])^2
-          sq_sim[t] <- (y_sim[t]-mu[t])^2
+          sq[t] <- (y[t]-fam_grps[t])^2
+          sq_sim[t] <- (y_sim[t]-fam_grps[t])^2
         # autocorrelation
           # Assure yourself that the process model adequately accounts for...
             # ...temporal autocorrelation in the residuals — allowing the assumption... 
             # ...that they are independent and identically distributed. 
             # To do this, include a derived quantity:
-          e[t] <- (y[t]-mu[t])
+          e[t] <- (y[t]-fam_grps[t])
       }
     #posterior predictive checks
       # test statistics y
@@ -335,8 +332,7 @@ model{
       tau <- 1/sigma.p^2
       # initial conditions informed priors
       N[1] ~ dlnorm(log(y[1]/phi) , tau)
-      # ????
-      mu[1] <- N[1] * phi
+      fam_grps[1] <- N[1] * phi # mean family groups (mu)
       
     ###########################
     # likelihood
@@ -345,13 +341,13 @@ model{
       for(t in 2:(y.endyr+1)){
     	  alpha[t] <- lambda * (N[t-1] - y.H[t-1])
     	  N[t] ~ dlnorm(log(max(alpha[t], 0.000001)), tau) # can't take the log of alpha <= 0
-    	  # ????
+    	  # calculate the mean for use in the data model
+    	  fam_grps[t] <- N[t] * phi # mean family groups (mu)
     	}
       # Data model:
       for(t in 2:y.endyr){
-        mu[t] <- N[t] * phi
         # returns density (for continuous) because l.h.s. is data (deterministic b/c defined in data)
-    	    y[t] ~ dpois(mu[t]) 
+    	    y[t] ~ dpois(fam_grps[t]) 
       }
     
     ###########################
@@ -361,10 +357,16 @@ model{
         # have to put this in own loop because y[1] defined separately 
         for(t in 1:y.endyr){
           # returns random number generator because l.h.s. is not data (i.e. it is unknown: stochastic node)
-            y_sim[t] ~ dpois(mu[t]) 
+            y_sim[t] ~ dpois(fam_grps[t]) 
           # sum of squares 
-            sq[t] <- (y[t]-mu[t])^2
-            sq_sim[t] <- (y_sim[t]-mu[t])^2
+            sq[t] <- (y[t]-fam_grps[t])^2
+            sq_sim[t] <- (y_sim[t]-fam_grps[t])^2
+          # autocorrelation
+            # Assure yourself that the process model adequately accounts for...
+              # ...temporal autocorrelation in the residuals — allowing the assumption... 
+              # ...that they are independent and identically distributed. 
+              # To do this, include a derived quantity:
+            e[t] <- (y[t]-fam_grps[t])
         }
       #posterior predictive checks
         # test statistics y
@@ -415,7 +417,6 @@ zm = rjags::coda.samples(
       "phi"
       , "lambda"
       , "sigma.p"
-      , "tau"
       # process model
       , "N"
       # # test statistics
@@ -431,6 +432,7 @@ zm = rjags::coda.samples(
       , "p_val_fit"
       # derived quantities
       , "e"
+      , "fam_grps"
     )
   , n.iter = n.iter
   , n.thin = 1
@@ -451,19 +453,15 @@ MCMCvis::MCMCsummary(zm, params = c(
     "phi"
     , "lambda"
     , "sigma.p"
-    , "tau"
     )
   )
 ```
 
-### Summary of the marginal posterior distributions of the unobserved states
+### Summary of the marginal posterior distributions of the latent state
 
 ```{r}
 # summary
-MCMCvis::MCMCsummary(zm, params = c(
-    "N"
-    )
-  )
+MCMCvis::MCMCsummary(zm, params = c("N"))
 ```
 
 ## Question 2
@@ -479,7 +477,6 @@ MCMCvis::MCMCtrace(zm, params = c(
     "phi"
     , "lambda"
     , "sigma.p"
-    , "tau"
     # p-values
     , "p_val_mean"
     , "p_val_sd"
@@ -488,6 +485,17 @@ MCMCvis::MCMCtrace(zm, params = c(
   , pdf = FALSE
 )
 ```
+
+## Question 4
+
+Conduct posterior predictive checks by simulating a new dataset for family groups ($f_t$) at every MCMC iteration. Calculate a Bayesian p value using the sums of squared discrepancy between the observed and the predicted number of family groups based on observed and simulated data,
+
+\begin{align*}
+T^{observed} &= \sum_{t=1}^{n} \bigl( f_{t}^{observed} - N_{t} \phi \bigr)^{2} \\
+T^{model} &= \sum_{t=1}^{n} \bigl( f_{t}^{simulated} - N_{t} \phi \bigr)^{2} \\
+\end{align*}
+
+The Bayesian p value is the proportion of MCMC iterations for which $T^{model} > T^{obs}$
 
 ### Posterior predictive check - Test Statistics
 
@@ -519,17 +527,46 @@ MCMCvis::MCMCsummary(zm, params = c(
   )
 ```
 
+### Posterior predictive check - Sum of Squared Errors
 
-## Question 4
+```{r}
+# PLOT
+MCMCvis::MCMCchains(zm, params = c("fit_y", "fit_y_sim")) %>%
+  data.frame() %>%
+ggplot(data = .) +
+  geom_abline(intercept = 0, slope = 1, lwd = 1, color = "gray20") +
+  geom_point(
+    mapping  = aes(x = fit_y, y = fit_y_sim)
+    , color = "gray60"
+    , alpha = 0.2
+  ) +
+  scale_y_continuous(
+    limits = c(
+      0
+      , 3500
+    )
+    , breaks = scales::extended_breaks(n=10)
+  ) +
+  scale_x_continuous(
+    limits = c(
+      0
+      , 3500
+    )
+    , breaks = scales::extended_breaks(n=10)
+  ) +
+  xlab("SSE Observed") +
+  ylab("SSE Simulated") +
+  labs(
+    title = "Observed vs. Simulated - Sum of Squared Errors"
+    , subtitle = paste0(
+        "*Bayesian P-value = "
+        , MCMCvis::MCMCchains(zm, params = c("p_val_fit")) %>% mean() %>% scales::comma(accuracy = 0.01)
+      )
+  ) +
+  theme_bw()
+```
 
-Conduct posterior predictive checks by simulating a new dataset for family groups ($f_t$) at every MCMC iteration. Calculate a Bayesian p value using the sums of squared discrepancy between the observed and the predicted number of family groups based on observed and simulated data,
-
-\begin{align*}
-T^{observed} &= \sum_{t=1}^{n} \bigl( f_{t}^{observed} - N_{t} \phi \bigr)^{2} \\
-T^{model} &= \sum_{t=1}^{n} \bigl( f_{t}^{simulated} - N_{t} \phi \bigr)^{2} \\
-\end{align*}
-
-The Bayesian p value is the proportion of MCMC iterations for which $T^{model} > T^{obs}$
+\textcolor{violet}{The Bayesian p-value of `r MCMCvis::MCMCchains(zm, params = c("p_val_fit")) %>% mean() %>% scales::comma(accuracy = 0.01)` indicates good fit for the lynx population.}
 
 Assure yourself that the process model adequately accounts for temporal autocorrelation in the residuals— allowing the assumption that they are independent and identically distributed. To do this, include a derived quantity
 
@@ -540,14 +577,35 @@ $$
 in your JAGS code and coda object. Use the following code or something like it to examine how autocorrelation in the residuals changes with time lag.
 
 ```{r, eval=FALSE}
-acf(unlist(MCMCpstr(z, param = "e", func = mean)), main = "", lwd = 3, ci = 0)
+acf(unlist(MCMCpstr(zm, param = "e", func = mean)), main = "", lwd = 3, ci = 0)
+```
+
+### Summary of the marginal posterior distributions of the model error
+
+```{r}
+# summary
+MCMCvis::MCMCsummary(zm, params = c("e"))
+```
+
+### Autocorrelation Function Estimate Plot
+
+```{r}
+  MCMCvis::MCMCpstr(zm, param = "e", func = mean) %>% 
+    unlist() %>% 
+    stats::acf(., main = "Autocorrelation Function Estimate"
+               , lwd = 4
+               , col = "gray35"
+               # , ci = 0
+               , type = "correlation"
+               , ylim = c(-1,1)
+    )
 ```
 
 ## Question 5
 
 Write a paragraph describing how to interpret the plot produced by this function.
 
-\textcolor{violet}{fill me in!!!}
+\textcolor{violet}{The autocorrelation function (ACF) estimate shows the autocorrelation of the model error over time. It is an estimate of the temporal dependence of the model errors and is calculated as a correlation coefficient ($\rho$) where $-1 \le \rho \le 1$. Ideally, the plot of the ACF would show no pattern (e.g. decreasing or increasing) over time (a-axis) with correlation values ($\rho$) not near -1 or 1. The plot of the ACF above reveals that this chain is not highly autocorrelated, which means that the assumption of independent errors does hold for these data.}
 
 ## Question 6
 
